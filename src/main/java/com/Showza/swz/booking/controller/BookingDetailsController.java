@@ -32,6 +32,11 @@ public class BookingDetailsController {
         return bookingDetailsService.create(bookingDetails);
     }
 
+    @PostMapping("/{id}/confirm")
+    public BookingDetails confirm(@PathVariable Long id) {
+        return bookingDetailsService.confirm(id);
+    }
+
     @GetMapping("/{id}")
     public BookingDetails getById(@PathVariable Long id) {
         return bookingDetailsService.getById(id);

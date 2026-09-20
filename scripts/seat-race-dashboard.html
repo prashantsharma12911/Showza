@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seat Race Test</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #14181f; --muted: #5d6675; --line: #e3e6eb;
+    --ok: #12805c; --ok-bg: #e2f5ed; --bad: #b42318; --bad-bg: #fde8e6;
+    --warn: #9a6700; --warn-bg: #fff3d1; --accent: #2b59ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1218; --card: #171b23; --text: #e8ebf0; --muted: #98a2b3; --line: #262c37;
+      --ok: #4ade9c; --ok-bg: #12332a; --bad: #ff8a80; --bad-bg: #3a1a18;
+      --warn: #f5c451; --warn-bg: #362b0e; --accent: #7b9bff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  input { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font: inherit; width: 150px; }
+  input.wide { width: 240px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .verdict { display: flex; align-items: center; gap: 14px; }
+  .verdict .badge { font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.idle { background: var(--line); color: var(--muted); }
+  .verdict h2 { margin: 0; font-size: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .stat b { display: block; font-size: 24px; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.bad { background: var(--bad-bg); color: var(--bad); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  h3 { margin: 0 0 10px; font-size: 14px; }
+  .round-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: var(--line); margin: 6px 0 10px; }
+  .bar i { display: block; height: 100%; }
+  .bar .w { background: var(--ok); } .bar .l { background: var(--bad); }
+  #log { color: var(--muted); font-size: 12px; margin-top: 8px; min-height: 18px; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Seat Race Test</h1>
+  <p class="sub">Fires N users at the same seat at the same instant and checks that exactly one booking is confirmed.</p>
+
+  <div class="card">
+    <div class="controls">
+      <label>API base URL <input id="base" class="wide" value="http://localhost:5000"></label>
+      <label>Concurrent users <input id="users" type="number" min="2" max="100" value="10"></label>
+      <label>Rounds (a fresh seat each) <input id="rounds" type="number" min="1" max="20" value="3"></label>
+      <button id="run">Run test</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div class="card">
+    <div class="verdict">
+      <span id="badge" class="badge idle">NOT RUN</span>
+      <h2 id="headline">Press “Run test” to start.</h2>
+    </div>
+    <div class="stats">
+      <div class="stat"><b id="sRounds">0</b><span>Rounds run</span></div>
+      <div class="stat"><b id="sHolds">0</b><span>Hold accepted (201)</span></div>
+      <div class="stat"><b id="sRej">0</b><span>Rejected while held (409)</span></div>
+      <div class="stat"><b id="sConf">0</b><span>Bookings confirmed</span></div>
+      <div class="stat"><b id="sDouble">0</b><span>Double bookings</span></div>
+    </div>
+  </div>
+
+  <div id="rounds-out"></div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const json = { 'Content-Type': 'application/json' };
+let BASE = '';
+
+async function call(method, path, body) {
+  const t0 = performance.now();
+  try {
+    const r = await fetch(BASE + '/api' + path, { method, headers: json, body: body ? JSON.stringify(body) : undefined });
+    let data = null; try { data = await r.json(); } catch (e) {}
+    return { status: r.status, data, ms: Math.round(performance.now() - t0) };
+  } catch (e) {
+    return { status: 0, data: { error: String(e) }, ms: Math.round(performance.now() - t0) };
+  }
+}
+
+const log = (m, isErr) => { $('log').innerHTML = isErr ? `<span class="err">${m}</span>` : m; };
+const pill = (cls, text) => `<span class="pill ${cls}">${text}</span>`;
+
+async function createUsers(n) {
+  const stamp = Date.now();
+  const res = await Promise.all(Array.from({ length: n }, (_, i) =>
+    call('POST', '/users', { name: `Racer ${i + 1}`, email: `racer-${stamp}-${i + 1}@test.com`, phone: '9999999999', role: 'CUSTOMER' })));
+  const bad = res.find(r => r.status !== 201);
+  if (bad) throw new Error('Could not create users: HTTP ' + bad.status);
+  return res.map(r => r.data.id);
+}
+
+async function runRound(idx, seat, userIds) {
+  const showId = seat.movieShow.id;
+  // 1) everyone tries to book the same seat simultaneously
+  const attempts = await Promise.all(userIds.map(uid =>
+    call('POST', '/bookings', { user: { id: uid }, movieShow: { id: showId }, showSeat: { id: seat.id }, amount: seat.price })
+      .then(r => ({ uid, ...r }))));
+  const holds = attempts.filter(a => a.status === 201);
+  // 2) everyone who got a booking row tries to confirm at the same instant
+  const confirms = await Promise.all(holds.map(h =>
+    call('POST', `/bookings/${h.data.id}/confirm`).then(r => ({ uid: h.uid, bookingId: h.data.id, ...r }))));
+  const confirmed = confirms.filter(c => c.status === 200 && c.data && c.data.status === 'CONFIRMED');
+  // 3) a late user tries after the fact
+  const late = await call('POST', '/bookings', { user: { id: userIds[0] }, movieShow: { id: showId }, showSeat: { id: seat.id }, amount: seat.price });
+  const after = await call('GET', `/show-seats/${seat.id}`);
+  return { idx, seat, attempts, holds, confirms, confirmed, late, finalStatus: after.data && after.data.status };
+}
+
+function renderRound(r) {
+  const n = r.attempts.length;
+  const rows = r.attempts.map(a => {
+    const c = r.confirms.find(x => x.uid === a.uid);
+    const book = a.status === 201 ? pill('ok', '201 hold accepted') : a.status === 409 ? pill('bad', '409 rejected') : pill('warn', 'HTTP ' + a.status);
+    const conf = !c ? '—' : (c.data && c.data.status === 'CONFIRMED') ? pill('ok', 'CONFIRMED') : pill('bad', c.status + ' ' + ((c.data && c.data.message) || 'rejected'));
+    return `<tr><td>User ${a.uid}</td><td>${book}</td><td class="num">${a.ms} ms</td><td>${conf}</td></tr>`;
+  }).join('');
+  const ok = r.confirmed.length === 1 && r.finalStatus === 'BOOKED';
+  return `<div class="card">
+    <div class="round-head"><h3>Round ${r.idx} · show-seat #${r.seat.id} (row ${r.seat.seat.row}, col ${r.seat.seat.col}, ${r.seat.seat.type}) · show #${r.seat.movieShow.id}</h3>
+      ${ok ? pill('ok', 'exactly 1 confirmed') : pill('bad', r.confirmed.length + ' confirmed')}</div>
+    <div class="bar"><i class="w" style="width:${r.holds.length / n * 100}%"></i><i class="l" style="width:${(n - r.holds.length) / n * 100}%"></i></div>
+    <table><thead><tr><th>User</th><th>Booking attempt</th><th>Latency</th><th>Confirm</th></tr></thead><tbody>${rows}</tbody></table>
+    <p style="margin:10px 0 0;color:var(--muted)">Late attempt after confirm: ${r.late.status === 409 ? pill('ok', '409 rejected') : pill('bad', 'HTTP ' + r.late.status)}
+      · Final seat status in DB: ${r.finalStatus === 'BOOKED' ? pill('ok', 'BOOKED') : pill('warn', r.finalStatus)}</p>
+  </div>`;
+}
+
+$('run').onclick = async () => {
+  BASE = $('base').value.replace(/\/$/, '');
+  const n = +$('users').value, rounds = +$('rounds').value;
+  $('run').disabled = true; $('rounds-out').innerHTML = '';
+  let holds = 0, rej = 0, conf = 0, doubles = 0, done = 0, allSafe = true;
+  const upd = () => {
+    $('sRounds').textContent = done; $('sHolds').textContent = holds; $('sRej').textContent = rej;
+    $('sConf').textContent = conf; $('sDouble').textContent = doubles;
+  };
+  try {
+    log('Loading available seats…');
+    const seatsRes = await call('GET', '/show-seats');
+    if (seatsRes.status !== 200) throw new Error('GET /show-seats failed with HTTP ' + seatsRes.status + ' (is Redis reachable?)');
+    const free = seatsRes.data.filter(s => s.status === 'AVAILABLE' && !s.held);
+    if (free.length < rounds) throw new Error(`Only ${free.length} available seats, need ${rounds}`);
+    log(`Creating ${n} test users…`);
+    const userIds = await createUsers(n);
+    for (let i = 0; i < rounds; i++) {
+      log(`Round ${i + 1}/${rounds}: ${n} users racing for show-seat #${free[i].id}…`);
+      const r = await runRound(i + 1, free[i], userIds);
+      done++; holds += r.holds.length; rej += r.attempts.length - r.holds.length; conf += r.confirmed.length;
+      if (r.confirmed.length > 1) doubles += r.confirmed.length - 1;
+      if (r.confirmed.length !== 1 || r.finalStatus !== 'BOOKED' || r.late.status !== 409) allSafe = false;
+      $('rounds-out').insertAdjacentHTML('beforeend', renderRound(r));
+      upd();
+    }
+    $('badge').className = 'badge ' + (allSafe ? 'ok' : 'bad');
+    $('badge').textContent = allSafe ? 'PASS' : 'FAIL';
+    $('headline').textContent = allSafe
+      ? `Only one user could book each seat, across ${done} rounds of ${n} concurrent users.`
+      : 'A seat was booked more than once, or was not booked at all. See the rounds below.';
+    log('Finished.');
+  } catch (e) {
+    $('badge').className = 'badge bad'; $('badge').textContent = 'ERROR';
+    $('headline').textContent = 'Test could not complete.';
+    log(String(e.message || e), true);
+  } finally { $('run').disabled = false; upd(); }
+};
+</script>
+</body>
+</html>

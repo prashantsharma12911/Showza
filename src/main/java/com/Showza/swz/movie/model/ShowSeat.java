@@ -12,6 +12,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
 @Entity
 @Table(name = "show_seats")
@@ -40,7 +41,19 @@ public class ShowSeat {
     @Column(nullable = false)
     private ShowSeatStatus status;
 
+    /** True while a user holds the seat in Redis; not persisted. */
+    @Transient
+    private boolean held;
+
     public ShowSeat() {
+    }
+
+    public boolean isHeld() {
+        return held;
+    }
+
+    public void setHeld(boolean held) {
+        this.held = held;
     }
 
     public ShowSeat(MovieShow movieShow, Seat seat, PriceTier priceTier, Double price, ShowSeatStatus status) {

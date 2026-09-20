@@ -8,6 +8,8 @@ public interface BookingDetailsService {
 
     BookingDetails create(BookingDetails bookingDetails);
 
+    BookingDetails confirm(Long id);
+
     BookingDetails getById(Long id);
 
     List<BookingDetails> getAll();
